@@ -173,7 +173,10 @@ async def comprar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"O produto será entregue automaticamente após o pagamento!"
     )
 
-    keyboard = [[InlineKeyboardButton("🔄 Verificar pagamento", callback_data=f"verificar_{billing_id}_{pid}")]]
+    keyboard = [
+        [InlineKeyboardButton("🔄 Verificar pagamento", callback_data=f"verificar_{billing_id}_{pid}")],
+        [InlineKeyboardButton("💬 Falar com o vendedor", url="https://t.me/do7ven")]
+    ]
 
     if qr_url and qr_url.startswith("http"):
         await ctx.bot.send_photo(

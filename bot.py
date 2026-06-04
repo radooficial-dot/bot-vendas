@@ -43,23 +43,39 @@ pedidos_pendentes = {}
 async def criar_cobranca(produto: dict, user_id: int) -> dict | None:
     """Cria uma cobrança PIX no AbacatePay e retorna os dados."""
     payload = {
-        "amount": int(produto["preco"] * 100),  # em centavos
-        "description": f"{NOME_LOJA} - {produto['nome']}",
-        "expiresIn": 1800,  # 30 minutos
-        "customer": {
-            "name": f"Cliente {user_id}",
-            "cellphone": "11999999999",
-            "email": f"cliente{user_id}@email.com",
-            "taxId": "000.000.000-00"
+        "frequency": "ONE_TIME",
+        "methods": ["PIX"],
+        "products": [
+            {
+                "external_id": f"prod_{produto.get('id', user_id)}",
+                "name": produto["nome"],
+                "description": produto.get("desc", produto["nome"]),
+                "quantity": 1,
+                "price": int(produto["preco"] * 100)
+            }
+        ],
+        "metadata": {
+            "return_url": "https://t.me/domdo7ven_bot",
+            "completion_url": "https://t.me/domdo7ven_bot"
         },
-        "methods": ["PIX"]
+        "customer": {
+            "metadata": {
+                "name": f"Cliente {user_id}",
+                "cellphone": "11999999999",
+                "email": f"cliente{user_id}@email.com",
+                "tax_id": "00000000000"
+            }
+        }
     }
     async with httpx.AsyncClient() as client:
         try:
             r = await client.post(f"{ABACATE_URL}/billing/create", json=payload, headers=HEADERS, timeout=15)
             data = r.json()
+            print(f"AbacatePay response: {data}")
             if r.status_code == 200 and data.get("data"):
                 return data["data"]
+            else:
+                print(f"Erro AbacatePay status {r.status_code}: {data}")
         except Exception as e:
             print(f"Erro AbacatePay: {e}")
     return None
@@ -160,8 +176,12 @@ async def comprar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     billing_id = cobranca.get("id")
-    pix_code = cobranca.get("brCode") or cobranca.get("pixCode") or cobranca.get("emv", "")
-    qr_url = cobranca.get("brCodeBase64") or cobranca.get("qrCodeUrl", "")
+    # AbacatePay retorna o PIX dentro de pixQrCode
+    pix_info = cobranca.get("pixQrCode") or {}
+    pix_code = pix_info.get("brCode") or cobranca.get("brCode") or cobranca.get("emv", "")
+    qr_url = pix_info.get("brCodeBase64") or cobranca.get("brCodeBase64") or ""
+    # URL de pagamento como fallback
+    pay_url = cobranca.get("url") or ""
 
     pedidos_pendentes[uid] = {"billing_id": billing_id, "produto_id": pid}
 

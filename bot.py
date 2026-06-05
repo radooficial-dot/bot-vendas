@@ -8,13 +8,14 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-ABACATE_KEY = os.getenv("ABACATE_API_KEY")
+MP_TOKEN = os.getenv("MP_ACCESS_TOKEN")
 NOME_LOJA = os.getenv("NOME_LOJA", "Dom Works")
-ABACATE_URL = "https://api.abacatepay.com/v1"
+MP_URL = "https://api.mercadopago.com/v1"
 
 HEADERS = {
-    "Authorization": f"Bearer {ABACATE_KEY}",
-    "Content-Type": "application/json"
+    "Authorization": f"Bearer {MP_TOKEN}",
+    "Content-Type": "application/json",
+    "X-Idempotency-Key": ""
 }
 
 # ─────────────────────────────────────────
@@ -41,56 +42,47 @@ pedidos_pendentes = {}
 
 
 async def criar_cobranca(produto: dict, user_id: int) -> dict | None:
-    """Cria uma cobrança PIX no AbacatePay e retorna os dados."""
+    """Cria uma cobrança PIX no Mercado Pago e retorna os dados."""
+    import uuid
+    headers = {
+        "Authorization": f"Bearer {MP_TOKEN}",
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": str(uuid.uuid4())
+    }
     payload = {
-        "frequency": "ONE_TIME",
-        "methods": ["PIX"],
-        "products": [
-            {
-                "external_id": f"prod_{produto.get('id', user_id)}",
-                "name": produto["nome"],
-                "description": produto.get("desc", produto["nome"]),
-                "quantity": 1,
-                "price": int(produto["preco"] * 100)
-            }
-        ],
-        "metadata": {
-            "return_url": "https://t.me/domdo7ven_bot",
-            "completion_url": "https://t.me/domdo7ven_bot"
-        },
-        "customer": {
-            "metadata": {
-                "name": f"Cliente {user_id}",
-                "cellphone": "11999999999",
-                "email": f"cliente{user_id}@email.com",
-                "tax_id": "00000000000"
-            }
+        "transaction_amount": float(produto["preco"]),
+        "description": f"{NOME_LOJA} - {produto['nome']}",
+        "payment_method_id": "pix",
+        "payer": {
+            "email": f"cliente{user_id}@domworks.com"
         }
     }
     async with httpx.AsyncClient() as client:
         try:
-            r = await client.post(f"{ABACATE_URL}/billing/create", json=payload, headers=HEADERS, timeout=15)
+            r = await client.post(f"{MP_URL}/payments", json=payload, headers=headers, timeout=15)
             data = r.json()
-            print(f"AbacatePay response: {data}")
-            if r.status_code == 200 and data.get("data"):
-                return data["data"]
+            print(f"MP response status: {r.status_code}")
+            print(f"MP response: {data}")
+            if r.status_code == 201 and data.get("id"):
+                return data
             else:
-                print(f"Erro AbacatePay status {r.status_code}: {data}")
+                print(f"Erro MP: {data}")
         except Exception as e:
-            print(f"Erro AbacatePay: {e}")
+            print(f"Erro Mercado Pago: {e}")
     return None
 
-
-async def verificar_pagamento(billing_id: str) -> bool:
-    """Verifica se a cobrança foi paga."""
+async def verificar_pagamento(payment_id: str) -> bool:
+    """Verifica se o pagamento foi aprovado no Mercado Pago."""
+    headers = {"Authorization": f"Bearer {MP_TOKEN}"}
     async with httpx.AsyncClient() as client:
         try:
-            r = await client.get(f"{ABACATE_URL}/billing/check?id={billing_id}", headers=HEADERS, timeout=10)
+            r = await client.get(f"{MP_URL}/payments/{payment_id}", headers=headers, timeout=10)
             data = r.json()
-            status = data.get("data", {}).get("status", "")
-            return status == "PAID"
+            status = data.get("status", "")
+            print(f"MP payment status: {status}")
+            return status == "approved"
         except Exception as e:
-            print(f"Erro verificação: {e}")
+            print(f"Erro verificação MP: {e}")
     return False
 
 
@@ -175,13 +167,12 @@ async def comprar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Erro ao gerar cobrança. Tente novamente em alguns instantes.")
         return
 
-    billing_id = cobranca.get("id")
-    # AbacatePay retorna o PIX dentro de pixQrCode
-    pix_info = cobranca.get("pixQrCode") or {}
-    pix_code = pix_info.get("brCode") or cobranca.get("brCode") or cobranca.get("emv", "")
-    qr_url = pix_info.get("brCodeBase64") or cobranca.get("brCodeBase64") or ""
-    # URL de pagamento como fallback
-    pay_url = cobranca.get("url") or ""
+    billing_id = str(cobranca.get("id"))
+    # Mercado Pago retorna PIX em point_of_interaction
+    pix_info = cobranca.get("point_of_interaction", {}).get("transaction_data", {})
+    pix_code = pix_info.get("qr_code", "")
+    qr_url = ""  # MP retorna base64 mas vamos usar só o código copia e cola
+    pay_url = ""
 
     pedidos_pendentes[uid] = {"billing_id": billing_id, "produto_id": pid}
 
